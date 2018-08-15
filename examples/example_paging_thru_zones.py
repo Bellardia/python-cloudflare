@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 """Cloudflare API code - example"""
 
+from __future__ import print_function
+
 import os
 import sys
 
@@ -12,6 +14,7 @@ def main():
 
     page_number = 0
     while True: 
+        page_number += 1
         try:
             raw_results = cf.zones.get(params={'per_page':5,'page':page_number})
         except CloudFlare.exceptions.CloudFlareAPIError as e:
@@ -30,11 +33,10 @@ def main():
         total_count = raw_results['result_info']['total_count']
         total_pages = raw_results['result_info']['total_pages']
 
-        print "COUNT=%d PAGE=%d PER_PAGE=%d TOTAL_COUNT=%d TOTAL_PAGES=%d -- %s" % (count, page, per_page, total_count, total_pages, domains)
+        print("COUNT=%d PAGE=%d PER_PAGE=%d TOTAL_COUNT=%d TOTAL_PAGES=%d -- %s" % (count, page, per_page, total_count, total_pages, domains))
 
         if page_number == total_pages:
             break
-        page_number += 1
 
 if __name__ == '__main__':
     main()

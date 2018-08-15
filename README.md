@@ -103,6 +103,7 @@ def main():
     cf = CloudFlare.CloudFlare(raw=True)
     page_number = 0
     while True:
+    	page_number += 1
         raw_results = cf.zones.get(params={'per_page':5,'page':page_number})
         zones = raw_results['result']
 
@@ -112,7 +113,6 @@ def main():
             print zone_id, zone_name
 
         total_pages = raw_results['result_info']['total_pages']
-        page_number += 1
         if page_number == total_pages:
             break
 
@@ -397,6 +397,31 @@ if __name__ == '__main__':
     main()
 ```
 
+## A DNS zone delete code example (be careful)
+
+```python
+#!/usr/bin/env python
+
+import sys
+import CloudFlare
+
+def main():
+    zone_name = sys.argv[1]
+    cf = CloudFlare.CloudFlare()
+    zone_info = cf.zones.get(param={'name': zone_name})
+    zone_id = zone_info['id']
+
+    dns_name = sys.argv[2]
+    dns_records = cf.zones.dns_records.get(zone_id, params={'name':dns_name + '.' + zone_name})
+    for dns_record in dns_records:
+        dns_record_id = dns_record['id']
+        r = cf.zones.dns_records.delete(zone_id, dns_record_id)
+    exit(0)
+
+if __name__ == '__main__':
+    main()
+```
+
 ## CLI
 
 All API calls can be called from the command line.
@@ -435,6 +460,8 @@ For example:
 ```
 cli4 --put ="00000000000000000000000000000000" /user/load_balancers/maps/:00000000000000000000000000000000/region/:WNAM
 ```
+
+Data can also be uploaded from file contents. Using the ```item=@filename``` format will open the file and the contents uploaded in the POST.
 
 ### CLI output
 
@@ -522,6 +549,67 @@ $ cli4 /zones/:example.com/available_plans | jq -c '.[]|{"id":.id,"name":.name}'
 $
 ```
 
+### Cloudflare CA CLI examples
+
+Here's some Cloudflare CA examples. Note the need of the zone_id= paramater with the basic **/certificates** call.
+
+```bash
+$ cli4 /zones/:example.com | jq -c '.|{"id":.id,"name":.name}'
+{"id":"12345678901234567890123456789012","name":"example.com"}
+$
+
+$ cli4 zone_id=12345678901234567890123456789012 /certificates | jq -c '.[]|{"id":.id,"expires_on":.expires_on,"hostnames":.hostnames,"certificate":.certificate}'
+{"id":"123456789012345678901234567890123456789012345678","expires_on":"2032-01-29 22:36:00 +0000 UTC","hostnames":["*.example.com","example.com"],"certificate":"-----BEGIN CERTIFICATE-----\n ... "}
+{"id":"123456789012345678901234567890123456789012345678","expires_on":"2032-01-28 23:23:00 +0000 UTC","hostnames":["*.example.com","example.com"],"certificate":"-----BEGIN CERTIFICATE-----\n ... "}
+{"id":"123456789012345678901234567890123456789012345678","expires_on":"2032-01-28 23:20:00 +0000 UTC","hostnames":["*.example.com","example.com"],"certificate":"-----BEGIN CERTIFICATE-----\n ... "}
+$
+```
+
+A certificate can be viewed via a simple GET request.
+```bash
+$ cli4 /certificates/:123456789012345678901234567890123456789012345678
+{
+    "certificate": "-----BEGIN CERTIFICATE-----\n ... ",
+    "expires_on": "2032-01-29 22:36:00 +0000 UTC",
+    "hostnames": [
+        "*.example.com",
+        "example.com"
+    ],
+    "id": "123456789012345678901234567890123456789012345678",
+    "request_type": "origin-rsa"
+}
+$
+```
+
+Creating a certificate. This is done with a **POST** request. Note the use of **==** in order to pass a decimal number (vs. string) in JSON. The CSR is not shown for simplicity sake.
+```bash
+$ CSR=`cat example.com.csr`
+$ cli4 --post hostnames='["example.com","*.example.com"]' requested_validity==365 request_type="origin-ecc" csr="$CSR" /certificates
+{
+    "certificate": "-----BEGIN CERTIFICATE-----\n ... ",
+    "csr": "-----BEGIN CERTIFICATE REQUEST-----\n ... ",
+    "expires_on": "2018-09-27 21:47:00 +0000 UTC",
+    "hostnames": [
+        "*.example.com",
+        "example.com"
+    ],
+    "id": "123456789012345678901234567890123456789012345678",
+    "request_type": "origin-ecc",
+    "requested_validity": 365
+}
+$
+```
+
+Deleting a certificate can be done with a **DELETE** call.
+```bash
+$ cli4 --delete /certificates/:123456789012345678901234567890123456789012345678
+{
+    "id": "123456789012345678901234567890123456789012345678",
+    "revoked_at": "0000-00-00T00:00:00Z"
+}
+$
+```
+
 ### Paging CLI examples
 
 The **--raw** command provides access to the paging returned values.
@@ -594,6 +682,199 @@ $ cli4 /zones/:example.com/dnssec
 }
 $
 ```
+
+### Zone file upload and download CLI examples (uses BIND format files)
+
+Refer to [Import DNS records](https://api.cloudflare.com/#dns-records-for-a-zone-import-dns-records) on API documentation for this feature.
+
+```bash
+$ cat zone.txt
+example.com.            IN      SOA     somewhere.example.com. someone.example.com. (
+                                2017010101
+                                3H
+                                15
+                                1w
+                                3h
+                        )
+
+record1.example.com.    IN      A       10.0.0.1
+record2.example.com.    IN      AAAA    2001:d8b::2
+record3.example.com.    IN      CNAME   record1.example.com.
+record4.example.com.    IN      TXT     "some text"
+$
+
+$ cli4 --post file=@zone.txt /zones/:example.com/dns_records/import
+{
+    "recs_added": 4,
+    "total_records_parsed": 4
+}
+$
+```
+
+The following is documented within the **Advanced** option of the DNS page within the Cloudflare portal.
+
+```
+$ cli4 /zones/:example.com/dns_records/export | egrep -v '^;;|^$'
+$ORIGIN .
+@	3600	IN	SOA	example.com.	root.example.com.	(
+		2025552311	; serial
+		7200		; refresh
+		3600		; retry
+		86400		; expire
+		3600)		; minimum
+example.com.	300	IN	NS	REPLACE&ME$WITH^YOUR@NAMESERVER.
+record4.example.com.	300	IN	TXT	"some text"
+record3.example.com.	300	IN	CNAME	record1.example.com.
+record1.example.com.	300	IN	A	10.0.0.1
+record2.example.com.	300	IN	AAAA	2001:d8b::2
+$
+```
+
+The egrep is used for documentation brevity.
+
+This can also be done via Python code with the following example.
+```
+#!/usr/bin/env python
+import sys
+import CloudFlare
+
+def main():
+    zone_name = sys.argv[1]
+    cf = CloudFlare.CloudFlare()
+
+    zones = cf.zones.get(params={'name': zone_name})
+    zone_id = zones[0]['id']
+
+    dns_records = cf.zones.dns_records.export.get(zone_id)
+    for l in dns_records.splitlines():
+        if len(l) == 0 or l[0] == ';':
+            continue
+        print l
+    exit(0)
+
+if __name__ == '__main__':
+    main()
+```
+
+### Cloudflare Workers
+
+Cloudflare Workers are described on the Cloudflare blog at
+[here](https://blog.cloudflare.com/introducing-cloudflare-workers/) and
+[here](https://blog.cloudflare.com/code-everywhere-cloudflare-workers/), with the beta release announced
+[here](https://blog.cloudflare.com/cloudflare-workers-is-now-on-open-beta/).
+
+The Python libraries now support the Cloudflare Workers API calls. The following javascript is lifted from [https://cloudflareworkers.com/](https://cloudflareworkers.com/) and slightly modified.
+
+```
+$ cat modify-body.js
+addEventListener("fetch", event => {
+  event.respondWith(fetchAndModify(event.request));
+});
+
+async function fetchAndModify(request) {
+  console.log("got a request:", request);
+
+  // Send the request on to the origin server.
+  const response = await fetch(request);
+
+  // Read response body.
+  const text = await response.text();
+
+  // Modify it.
+  const modified = text.replace(
+  "<body>",
+  "<body style=\"background: #ff0;\">");
+
+  // Return modified response.
+  return new Response(modified, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers
+  });
+}
+$
+```
+
+Here's the website with it's simple ```<body>``` statement
+
+```
+$ curl -sS https://example.com/ | fgrep '<body'
+  <body>
+$
+```
+
+Now lets add the script. Looking above, you will see that it's simple action is to modify the ```<body>``` statement and make the background yellow.
+
+```
+$ cli4 --put @- /zones/:example.com/workers/script < modify-body.js
+{
+    "etag": "1234567890123456789012345678901234567890123456789012345678901234",
+    "id": "example-com",
+    "modified_on": "2018-02-15T00:00:00.000000Z",
+    "script": "addEventListener(\"fetch\", event => {\n  event.respondWith(fetchAndModify(event.request));\n});\n\nasync function fetchAndModify(request) {\n  console.log(\"got a request:\", request);\n\n  // Send the request on to the origin server.\n  const response = await fetch(request);\n\n  // Read response body.\n  const text = await response.text();\n\n  // Modify it.\n  const modified = text.replace(\n  \"<body>\",\n  \"<body style=\\\"background: #ff0;\\\">\");\n\n  // Return modified response.\n  return new Response(modified, {\n    status: response.status,\n    statusText: response.statusText,\n    headers: response.headers\n  });\n}\n",
+    "size": 603
+}
+$
+```
+
+The following call checks that the script is associated with the zone. In this case, it's the only script added by this user.
+
+```
+$ python3 -m cli4 /user/workers/scripts
+[
+    {
+        "created_on": "2018-02-15T00:00:00.000000Z",
+        "etag": "1234567890123456789012345678901234567890123456789012345678901234",
+        "id": "example-com",
+        "modified_on": "2018-02-15T00:00:00.000000Z"
+    }
+]
+$
+```
+
+Next step is to make sure a route is added for that script on that zone.
+
+```
+$ cli4 --post pattern="example.com/*" script="example-com" /zones/:example.com/workers/routes
+{
+    "id": "12345678901234567890123456789012"
+}
+$
+
+$ cli4 /zones/:example.com/workers/routes
+[
+    {
+        "id": "12345678901234567890123456789012",
+        "pattern": "example.com/*",
+        "script": "example-com"
+    }
+]
+$
+```
+
+With that script added to the zone and the route added, we can now see the the website has been modified because of the Cloudflare Worker.
+
+```
+$ curl -sS https://example.com/ | fgrep '<body'
+  <body style="background: #ff0;">
+$
+```
+
+All this can be removed; hence bringing the website back to its initial state.
+
+```
+$ cli4 --delete /zones/:example.com/workers/script
+12345678901234567890123456789012
+$ cli4 --delete /zones/:example.com/workers/routes/:12345678901234567890123456789012
+true
+$
+
+$ curl -sS https://example.com/ | fgrep '<body'
+  <body>
+$
+```
+
+Refer to the Cloudflare Workers API documentation for more information.
 
 ## Implemented API calls
 
@@ -716,7 +997,7 @@ The solution can be found [here](https://urllib3.readthedocs.org/en/latest/secur
 
 ## Python 2.x vs 3.x support
 
-As of May/June 2016 the code is now tested againt pylint.
+As of May/June 2016 the code is now tested against pylint.
 This was required in order to move the codebase into Python 3.x.
 The motivation for this came from [Danielle Madeley (danni)](https://github.com/danni).
 
